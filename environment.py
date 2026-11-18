@@ -16,6 +16,7 @@ class EnvPMSM(gym.Env):
         self.p      = sys_params["p"]               # Pole pairs, torque equation needs it
                                                     # since we will use normalization by TeMax, 
                                                     # these p cancel out
+        self.alpha = sys_params["alpha"]            # MTPA reward weight 
     
         # Maximum amount of simulation steps
         self.max_steps = sys_params["sim_steps"]
@@ -105,21 +106,27 @@ class EnvPMSM(gym.Env):
         # Normalize observation
         id_next_norm = id_next / self.i_max
         iq_next_norm = iq_next / self.i_max
+        # Adding measurement noise
+        id_meas_norm = id_next_norm + e
+        iq_meas_norm = iq_next_norm + e
         
-        # Observation: [id, iq]
-        obs = np.array([id_next_norm + e, iq_next_norm + e], dtype=np.float32)
+        # Observation: [id, iq, Te]
+        obs = np.array([id_meas_norm, iq_meas_norm, self.te_ref_norm], dtype=np.float32)
 
         terminated = True if self.steps == self.max_steps - 1 else False
+        
+        # Reward functions:
+        # task 2.b torque tracking
+        te_next_norm = self._torque(id_next, iq_next) / self.te_max
+        e_te         = te_next_norm - self.te_ref_norm
+        r_tracking   = -np.abs(e_te)
+        
+        # task 2.c MTPA
+        # among all (id,iq) giving this torque, prefer the smallest vector
+        i_mag_norm   = np.sqrt(id_next_norm**2 + iq_next_norm**2)
+        r_mtpa       = -i_mag_norm
 
-        # Reward function
-        id_norm = (self.id + e) / self.i_max
-        iq_norm = (self.iq + e)/ self.i_max
-        id_ref_norm = self.id_ref / self.i_max
-        iq_ref_norm = self.iq_ref / self.i_max
-        e_id = np.abs(id_norm - id_ref_norm)
-        e_iq = np.abs(iq_norm - iq_ref_norm)
-
-        reward = -(e_id + e_iq)
+        reward = r_tracking + self.alpha * r_mtpa
 
         # Update states
         self.id = id_next
