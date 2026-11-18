@@ -13,7 +13,10 @@ class EnvPMSM(gym.Env):
         self.lambda_PM = sys_params["lambda_PM"]    # Flux-linkage due to permanent magnets [Wb]
         self.we     = sys_params["we"]              # Nominal speed [rad/s]
         self.vdc    = sys_params["vdc"]             # DC bus voltage [V]
-        
+        self.p      = sys_params["p"]               # Pole pairs, torque equation needs it
+                                                    # since we will use normalization by TeMax, 
+                                                    # these p cancel out
+    
         # Maximum amount of simulation steps
         self.max_steps = sys_params["sim_steps"]
         
@@ -36,6 +39,7 @@ class EnvPMSM(gym.Env):
 
         # Define state-space representation
         self.__state_space()
+        
 
         # Limitations for the system
         # Actions
@@ -48,16 +52,22 @@ class EnvPMSM(gym.Env):
         self.high_actions = np.array(
             [self.max_vd, self.max_vq], dtype=np.float32
         )
-
-        # Observations
+        
+        self.te_max = self._compute_te_max()        # Te max function
+        
+        # Observations: normalized id, iq and te_ref
+        # Speed (we) and Vdc are fixed so they are left out 
         self.min_id,     self.max_id     = [-1.0, 1.0]
         self.min_iq,     self.max_iq     = [-1.0, 1.0]
-
+        self.min_te_ref, self.max_te_ref = [-1.0, 1.0]
+        
+        
+        # task 2.a extending observation space
         self.low_observations = np.array(
-            [self.min_id, self.min_iq], dtype=np.float32
+            [self.min_id, self.min_iq, self.min_te_ref], dtype=np.float32
         )
         self.high_observations = np.array(
-            [self.max_id, self.max_iq], dtype=np.float32
+            [self.max_id, self.max_iq, self.max_te_ref], dtype=np.float32
         )
 
         # Render mode
@@ -95,6 +105,7 @@ class EnvPMSM(gym.Env):
         # Normalize observation
         id_next_norm = id_next / self.i_max
         iq_next_norm = iq_next / self.i_max
+        
         # Observation: [id, iq]
         obs = np.array([id_next_norm + e, iq_next_norm + e], dtype=np.float32)
 
@@ -122,17 +133,29 @@ class EnvPMSM(gym.Env):
     def reset(self, *, seed = None, options = None):
         super().reset(seed=seed)
         self.steps = 0
+        
+        options = options or {}
 
         # Initialization of normalized dq-currents
-        # [id,iq]
-        id_norm = self.id0
-        iq_norm = self.iq0
+        if "idq0" in options: 
+            id_norm, iq_norm = options["idq0"]
+        else:
+            angle = self.np_random.uniform(0.0, 2*np.pi)
+            radius = np.sqrt(self.np_random.uniform(0.0, 1.0))
+            id_norm = radius * np.cos(angle)
+            iq_norm = radius * np.sin(angle)
 
-        # Store idq
+        # Store id and iq
         self.id = self.i_max * id_norm
         self.iq = self.i_max * iq_norm
+        
+        # Te ref normalized
+        if "te_ref" in options:
+            self.te_ref_norm = options["te_ref"]
+        else:
+            self.te_ref_norm = self.np_random.uniform(-1.0, 1.0)
 
-        obs = np.array([id_norm, iq_norm], dtype=np.float32)
+        obs = np.array([id_norm, iq_norm, self.te_ref_norm], dtype=np.float32)
 
         return obs, {}
     
@@ -162,3 +185,19 @@ class EnvPMSM(gym.Env):
         self.bd = bdw[:,:b.shape[1]]
         self.wd = bdw[:,b.shape[1]:].squeeze()
         self.cd = cd
+    
+    # torque equation
+    def _torque(self, i_d, i_q):
+        # self._torque(0,100) gives Te at id = 0 iq = 100
+        Te = (3*self.p)/2 * (self.lambda_PM * i_q + (self.ld - self.lq) * i_q * i_d)
+        return Te
+    
+    # computing normalizer Te_max
+    def _compute_te_max(self):
+        theta = np.linspace(0, 2*np.pi, 3601)   # 3601 angles around the circle
+        i_d = self.i_max * np.cos(theta)
+        i_q = self.i_max * np.sin(theta)
+        Te_max = float(np.max(np.abs(self._torque(i_d, i_q))))
+        return Te_max
+    
+        
