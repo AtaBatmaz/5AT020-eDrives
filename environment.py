@@ -207,4 +207,21 @@ class EnvPMSM(gym.Env):
         Te_max = float(np.max(np.abs(self._torque(i_d, i_q))))
         return Te_max
     
+    # task 2.d analytical MTPA
+    def mtpa_reference(self, te_ref):
+        
+        te_ref = float(np.clip(te_ref, -self.te_max, self.te_max))
+        
+        if te_ref == 0.0:
+            return 0.0, 0.0
+        
+        a = self.lq - self.ld
+        c = 1.5 * self.p
+        lam = self.lambda_PM
+        
+        roots = np.roots([a**3, -3*a**2*lam, 3*a*lam**2, -lam**3, -a * te_ref**2 / c**2])
+        real = roots[np.abs(roots.imag) < 1e-9].real
+        i_d = float(real[real <= 1e-12].max())    # unique root with Id <= 0
+        i_q = te_ref / (c * (lam - a * i_d))      # sign follows te_ref
+        return i_d, i_q
         
